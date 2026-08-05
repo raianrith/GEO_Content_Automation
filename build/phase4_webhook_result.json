@@ -1,0 +1,12 @@
+{
+    "phase4_status":  "PASS",
+    "topic_id":  1,
+    "topic":  "Why there\u0027s a piece of Belgium inside a Dutch town inside Belgium",
+    "hook":  "Inside a Dutch town, there\u0027s a piece of Belgium. Inside that piece of Belgium, there\u0027s another piece of the Netherlands. Inside that, Belgium again.",
+    "scene_count":  4,
+    "audio_url":  "https://fahosgalmjfxpijzjplf.supabase.co/storage/v1/object/public/reels-assets/audio/reel_1_1785925328921.mp3",
+    "audio_filename":  "audio/reel_1_1785925328921.mp3",
+    "video_url":  "https://f002.backblazeb2.com/file/creatomate-c8xg3hsxdu/fc4c6e02-0292-4fe7-a862-72f0747e9c33.mp4",
+    "render_id":  "fc4c6e02-0292-4fe7-a862-72f0747e9c33",
+    "render_status":  "succeeded"
+}

@@ -1,0 +1,316 @@
+{
+  "name": "Reel Pipeline 1 — Generate & Send for Approval",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every Morning 8am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "days", "triggerAtHour": 8, "triggerAtMinute": 0 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "get_topic",
+      "name": "Supabase: Next Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/reel_topics?status=eq.queued&order=priority.asc,created_at.asc&limit=1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "has_topic",
+      "name": "Topic Found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [440, 0],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "mark_generating",
+      "name": "Supabase: Mark Topic Generating",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, -100],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://YOUR_PROJECT_REF.supabase.co/rest/v1/reel_topics?id=eq.{{ $json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"status\": \"generating\", \"updated_at\": \"now()\" }",
+        "options": {}
+      }
+    },
+    {
+      "id": "claude",
+      "name": "Claude: Write Script",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, -100],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-api-key", "value": "YOUR_ANTHROPIC_API_KEY" },
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: 'claude-sonnet-4-6',\n  max_tokens: 1500,\n  system: \"You are the head writer for a viral Instagram reels account about geography and history oddities. The format: faceless voiceover over animated satellite maps. Audience: curious 18-40 year olds scrolling at speed. You have 1.5 seconds to stop the scroll.\\n\\nRULES:\\n- Total voiceover: 60-90 words. Never more.\\n- EXACTLY 4 scenes.\\n- Scene 1 is the hook: a concrete, surprising claim in the first sentence (a number, a contradiction, or an impossible-sounding fact). Never open with 'Did you know', a question, or context-setting.\\n- One idea per reel.\\n- Scene 4 delivers the payoff plus ONE line that provokes shares or comments. No 'follow for more'.\\n- Every fact must be real. If unsure of a number, use 'more than' or 'nearly' rather than inventing precision.\\n- Write for the ear: short sentences, contractions, no subclauses. Vary sentence length.\\n- overlay_text: max 6 words per scene.\\n- Map coordinates must be the real location. zoom 2-4 continental, 5-8 country, 9-13 local. Change zoom by at least 3 levels across the reel.\\n\\nHOOK FORMULAS (rotate): impossible fact / big number small thing / contradiction / stakes reveal.\\n\\nOUTPUT: ONLY a valid JSON object, no preamble, no markdown fences:\\n{\\\"hook\\\": \\\"...\\\", \\\"script\\\": \\\"...\\\", \\\"caption\\\": \\\"1-2 punchy lines + 5 hashtags\\\", \\\"scenes\\\": [{\\\"n\\\":1, \\\"voiceover\\\":\\\"...\\\", \\\"overlay_text\\\":\\\"...\\\", \\\"map\\\":{\\\"lat\\\":0.0, \\\"lng\\\":0.0, \\\"zoom\\\":5, \\\"style\\\":\\\"satellite-streets-v12\\\"}}]}\",\n  messages: [{\n    role: 'user',\n    content: 'Topic: ' + $('Supabase: Next Topic').item.json.topic + '\\nSeries: ' + ($('Supabase: Next Topic').item.json.series || 'none') + '\\nAngle notes: ' + ($('Supabase: Next Topic').item.json.notes || 'none') + '\\n\\nWrite the reel.'\n  }]\n}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "parse_script",
+      "name": "Parse Script + Build Map URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, -100],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const MAPBOX_TOKEN = 'YOUR_MAPBOX_PUBLIC_TOKEN';\n\nconst resp = $input.first().json;\nconst text = (resp.content || []).filter(b => b.type === 'text').map(b => b.text).join('\\n');\nconst clean = text.replace(/```json|```/g, '').trim();\n\nlet script;\ntry {\n  script = JSON.parse(clean);\n} catch (e) {\n  throw new Error('Claude did not return valid JSON. Raw output: ' + clean.slice(0, 500));\n}\n\nif (!script.scenes || script.scenes.length !== 4) {\n  throw new Error('Expected exactly 4 scenes, got ' + (script.scenes ? script.scenes.length : 0));\n}\n\n// Mapbox Static Images: request dims must be <= 1280 each; @2x doubles output.\n// 720x1280@2x -> 1440x2560px, plenty for a 1080x1920 canvas with zoom animation.\nfor (const s of script.scenes) {\n  const m = s.map;\n  const style = m.style || 'satellite-streets-v12';\n  s.image_url = `https://api.mapbox.com/styles/v1/mapbox/${style}/static/${m.lng},${m.lat},${m.zoom},0,45/720x1280@2x?access_token=${MAPBOX_TOKEN}`;\n}\n\nconst topic = $('Supabase: Next Topic').first().json;\n\nreturn [{\n  json: {\n    topic_id: topic.id,\n    topic: topic.topic,\n    hook: script.hook,\n    script: script.script,\n    caption: script.caption,\n    scenes: script.scenes,\n    audio_filename: `audio/reel_${topic.id}_${Date.now()}.mp3`\n  }\n}];"
+      }
+    },
+    {
+      "id": "elevenlabs",
+      "name": "ElevenLabs: Voiceover",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1320, -100],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.elevenlabs.io/v1/text-to-speech/YOUR_VOICE_ID?output_format=mp3_44100_128",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "xi-api-key", "value": "YOUR_ELEVENLABS_API_KEY" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.script, model_id: 'eleven_multilingual_v2', voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.35 } }) }}",
+        "options": {
+          "response": { "response": { "responseFormat": "file", "outputPropertyName": "data" } }
+        }
+      }
+    },
+    {
+      "id": "upload_audio",
+      "name": "Supabase Storage: Upload Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, -100],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://YOUR_PROJECT_REF.supabase.co/storage/v1/object/reels-assets/{{ $('Parse Script + Build Map URLs').item.json.audio_filename }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Content-Type", "value": "audio/mpeg" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {}
+      }
+    },
+    {
+      "id": "creatomate_render",
+      "name": "Creatomate: Start Render",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1760, -100],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.creatomate.com/v1/renders",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer YOUR_CREATOMATE_API_KEY" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => {\n  const d = $('Parse Script + Build Map URLs').item.json;\n  const audioUrl = 'https://YOUR_PROJECT_REF.supabase.co/storage/v1/object/public/reels-assets/' + d.audio_filename;\n  const mods = { 'Voiceover.source': audioUrl };\n  d.scenes.forEach((s, i) => {\n    mods[`Scene${i+1}-Map.source`] = s.image_url;\n    mods[`Scene${i+1}-Text.text`] = s.overlay_text;\n    mods[`Scene${i+1}-Caption.transcript_source`] = s.voiceover;\n  });\n  return JSON.stringify({ template_id: 'YOUR_CREATOMATE_TEMPLATE_ID', modifications: mods });\n})() }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "wait_render",
+      "name": "Wait 60s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1980, -100],
+      "parameters": { "amount": 60, "unit": "seconds" }
+    },
+    {
+      "id": "poll_render",
+      "name": "Creatomate: Poll Render",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, -100],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.creatomate.com/v1/renders/{{ $('Creatomate: Start Render').item.json[0] ? $('Creatomate: Start Render').item.json[0].id : $('Creatomate: Start Render').item.json.id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer YOUR_CREATOMATE_API_KEY" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "render_done",
+      "name": "Render Finished?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2420, -100],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "succeeded",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "save_reel",
+      "name": "Supabase: Save Reel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2640, -200],
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/reels",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => {\n  const d = $('Parse Script + Build Map URLs').item.json;\n  const audioUrl = 'https://YOUR_PROJECT_REF.supabase.co/storage/v1/object/public/reels-assets/' + d.audio_filename;\n  return JSON.stringify({\n    topic_id: d.topic_id,\n    hook: d.hook,\n    script: d.script,\n    caption: d.caption,\n    scenes: d.scenes,\n    audio_url: audioUrl,\n    video_url: $json.url,\n    status: 'pending_approval'\n  });\n})() }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "telegram_approval",
+      "name": "Telegram: Send for Approval",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2860, -200],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/sendVideo",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => {\n  const reel = Array.isArray($json) ? $json[0] : $json;\n  const d = $('Parse Script + Build Map URLs').item.json;\n  return JSON.stringify({\n    chat_id: 'YOUR_TELEGRAM_CHAT_ID',\n    video: reel.video_url,\n    caption: '🎬 ' + d.topic + '\\n\\nHOOK: ' + d.hook + '\\n\\nCAPTION:\\n' + d.caption,\n    reply_markup: {\n      inline_keyboard: [[\n        { text: '✅ Approve & Publish', callback_data: 'approve:' + reel.id },\n        { text: '❌ Reject', callback_data: 'reject:' + reel.id }\n      ]]\n    }\n  });\n})() }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "mark_generated",
+      "name": "Supabase: Mark Topic Generated",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3080, -200],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://YOUR_PROJECT_REF.supabase.co/rest/v1/reel_topics?id=eq.{{ $('Parse Script + Build Map URLs').item.json.topic_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"status\": \"generated\" }",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Every Morning 8am": { "main": [[{ "node": "Supabase: Next Topic", "type": "main", "index": 0 }]] },
+    "Supabase: Next Topic": { "main": [[{ "node": "Topic Found?", "type": "main", "index": 0 }]] },
+    "Topic Found?": { "main": [[{ "node": "Supabase: Mark Topic Generating", "type": "main", "index": 0 }], []] },
+    "Supabase: Mark Topic Generating": { "main": [[{ "node": "Claude: Write Script", "type": "main", "index": 0 }]] },
+    "Claude: Write Script": { "main": [[{ "node": "Parse Script + Build Map URLs", "type": "main", "index": 0 }]] },
+    "Parse Script + Build Map URLs": { "main": [[{ "node": "ElevenLabs: Voiceover", "type": "main", "index": 0 }]] },
+    "ElevenLabs: Voiceover": { "main": [[{ "node": "Supabase Storage: Upload Audio", "type": "main", "index": 0 }]] },
+    "Supabase Storage: Upload Audio": { "main": [[{ "node": "Creatomate: Start Render", "type": "main", "index": 0 }]] },
+    "Creatomate: Start Render": { "main": [[{ "node": "Wait 60s", "type": "main", "index": 0 }]] },
+    "Wait 60s": { "main": [[{ "node": "Creatomate: Poll Render", "type": "main", "index": 0 }]] },
+    "Creatomate: Poll Render": { "main": [[{ "node": "Render Finished?", "type": "main", "index": 0 }]] },
+    "Render Finished?": { "main": [[{ "node": "Supabase: Save Reel", "type": "main", "index": 0 }], [{ "node": "Wait 60s", "type": "main", "index": 0 }]] },
+    "Supabase: Save Reel": { "main": [[{ "node": "Telegram: Send for Approval", "type": "main", "index": 0 }]] },
+    "Telegram: Send for Approval": { "main": [[{ "node": "Supabase: Mark Topic Generated", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

@@ -1,0 +1,19 @@
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Node (if added later)
+node_modules/
+dist/
+
+# Build artifacts with injected secrets (Phase 3 may write corrected workflow JSON here)
+/build/*.local.json

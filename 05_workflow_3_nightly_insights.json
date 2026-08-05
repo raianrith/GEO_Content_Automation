@@ -1,0 +1,102 @@
+{
+  "name": "Reel Pipeline 3 — Nightly Performance Pull",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Every Night 11pm",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "days", "triggerAtHour": 23, "triggerAtMinute": 0 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "get_published",
+      "name": "Supabase: Published Reels (30d)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://YOUR_PROJECT_REF.supabase.co/rest/v1/reels?status=eq.published&published_at=gte.' + new Date(Date.now() - 30*24*3600*1000).toISOString() + '&select=id,ig_media_id' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "split",
+      "name": "Split Into Items",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [440, 0],
+      "parameters": { "fieldToSplitOut": "$item", "options": {} }
+    },
+    {
+      "id": "ig_insights",
+      "name": "IG: Fetch Insights",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 0],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://graph.facebook.com/v21.0/{{ $json.ig_media_id }}/insights?metric=views,reach,likes,comments,shares,saved,total_interactions,ig_reels_avg_watch_time&access_token=YOUR_META_LONG_LIVED_ACCESS_TOKEN",
+        "options": {}
+      }
+    },
+    {
+      "id": "shape",
+      "name": "Shape Metrics Row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 0],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const src = $('Split Into Items').item.json;\nconst metrics = {};\nfor (const m of ($json.data || [])) {\n  metrics[m.name] = m.values && m.values[0] ? m.values[0].value : null;\n}\nreturn { json: {\n  reel_id: src.id,\n  ig_media_id: src.ig_media_id,\n  snapshot_date: new Date().toISOString().slice(0, 10),\n  views: metrics.views ?? null,\n  reach: metrics.reach ?? null,\n  likes: metrics.likes ?? null,\n  comments: metrics.comments ?? null,\n  shares: metrics.shares ?? null,\n  saves: metrics.saved ?? null,\n  avg_watch_time_ms: metrics.ig_reels_avg_watch_time ?? null,\n  total_interactions: metrics.total_interactions ?? null,\n  raw: $json.data || []\n}};"
+      }
+    },
+    {
+      "id": "upsert",
+      "name": "Supabase: Upsert Performance",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR_PROJECT_REF.supabase.co/rest/v1/reel_performance?on_conflict=ig_media_id,snapshot_date",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "resolution=merge-duplicates" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Every Night 11pm": { "main": [[{ "node": "Supabase: Published Reels (30d)", "type": "main", "index": 0 }]] },
+    "Supabase: Published Reels (30d)": { "main": [[{ "node": "Split Into Items", "type": "main", "index": 0 }]] },
+    "Split Into Items": { "main": [[{ "node": "IG: Fetch Insights", "type": "main", "index": 0 }]] },
+    "IG: Fetch Insights": { "main": [[{ "node": "Shape Metrics Row", "type": "main", "index": 0 }]] },
+    "Shape Metrics Row": { "main": [[{ "node": "Supabase: Upsert Performance", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}

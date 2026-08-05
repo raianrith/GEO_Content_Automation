@@ -1,0 +1,255 @@
+{
+  "name": "Reel Pipeline 2 — Approve & Publish to Instagram",
+  "nodes": [
+    {
+      "id": "tg_trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 0],
+      "parameters": {
+        "updates": ["callback_query"],
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": { "id": "REPLACE_AFTER_IMPORT", "name": "Reel Bot" }
+      }
+    },
+    {
+      "id": "parse_cb",
+      "name": "Parse Decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const cb = $input.first().json.callback_query;\nif (!cb || !cb.data) throw new Error('Not a callback query');\nconst [action, reelId] = cb.data.split(':');\nreturn [{ json: {\n  action,\n  reel_id: reelId,\n  callback_query_id: cb.id,\n  chat_id: cb.message.chat.id,\n  message_id: cb.message.message_id\n}}];"
+      }
+    },
+    {
+      "id": "ack",
+      "name": "Telegram: Ack Button Press",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [440, 0],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/answerCallbackQuery",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ callback_query_id: $json.callback_query_id, text: $json.action === 'approve' ? 'Publishing…' : 'Rejected' }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "is_approve",
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [660, 0],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $('Parse Decision').item.json.action }}",
+              "rightValue": "approve",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "get_reel",
+      "name": "Supabase: Get Reel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, -120],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://YOUR_PROJECT_REF.supabase.co/rest/v1/reels?id=eq.{{ $('Parse Decision').item.json.reel_id }}&limit=1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ig_container",
+      "name": "IG: Create Media Container",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, -120],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v21.0/YOUR_IG_USER_ID/media",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  media_type: 'REELS',\n  video_url: $json.video_url,\n  caption: $json.caption,\n  share_to_feed: true,\n  access_token: 'YOUR_META_LONG_LIVED_ACCESS_TOKEN'\n}) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "wait_ig",
+      "name": "Wait 45s (IG processing)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1320, -120],
+      "parameters": { "amount": 45, "unit": "seconds" }
+    },
+    {
+      "id": "ig_status",
+      "name": "IG: Check Container Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1540, -120],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://graph.facebook.com/v21.0/{{ $('IG: Create Media Container').item.json.id }}?fields=status_code&access_token=YOUR_META_LONG_LIVED_ACCESS_TOKEN",
+        "options": {}
+      }
+    },
+    {
+      "id": "ig_ready",
+      "name": "Container Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1760, -120],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status_code }}",
+              "rightValue": "FINISHED",
+              "operator": { "type": "string", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "ig_publish",
+      "name": "IG: Publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1980, -220],
+      "parameters": {
+        "method": "POST",
+        "url": "https://graph.facebook.com/v21.0/YOUR_IG_USER_ID/media_publish",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ creation_id: $('IG: Create Media Container').item.json.id, access_token: 'YOUR_META_LONG_LIVED_ACCESS_TOKEN' }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "mark_published",
+      "name": "Supabase: Mark Published",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2200, -220],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://YOUR_PROJECT_REF.supabase.co/rest/v1/reels?id=eq.{{ $('Parse Decision').item.json.reel_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'published', ig_media_id: String($json.id), published_at: new Date().toISOString() }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "tg_confirm",
+      "name": "Telegram: Confirm Published",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2420, -220],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botYOUR_TELEGRAM_BOT_TOKEN/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $('Parse Decision').item.json.chat_id, text: '✅ Published to Instagram. Reel ID: ' + $('Parse Decision').item.json.reel_id }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "mark_rejected",
+      "name": "Supabase: Mark Rejected + Requeue Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 140],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://YOUR_PROJECT_REF.supabase.co/rest/v1/reels?id=eq.{{ $('Parse Decision').item.json.reel_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"status\": \"rejected\" }",
+        "options": {}
+      }
+    },
+    {
+      "id": "requeue_topic",
+      "name": "Supabase: Requeue Topic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1100, 140],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://YOUR_PROJECT_REF.supabase.co/rest/v1/reel_topics?id=eq.{{ Array.isArray($json) ? $json[0].topic_id : $json.topic_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Authorization", "value": "Bearer YOUR_SUPABASE_SERVICE_ROLE_KEY" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{ \"status\": \"queued\", \"notes\": \"REGENERATE: previous version rejected — try a different hook formula\" }",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": { "main": [[{ "node": "Parse Decision", "type": "main", "index": 0 }]] },
+    "Parse Decision": { "main": [[{ "node": "Telegram: Ack Button Press", "type": "main", "index": 0 }]] },
+    "Telegram: Ack Button Press": { "main": [[{ "node": "Approved?", "type": "main", "index": 0 }]] },
+    "Approved?": { "main": [[{ "node": "Supabase: Get Reel", "type": "main", "index": 0 }], [{ "node": "Supabase: Mark Rejected + Requeue Topic", "type": "main", "index": 0 }]] },
+    "Supabase: Get Reel": { "main": [[{ "node": "IG: Create Media Container", "type": "main", "index": 0 }]] },
+    "IG: Create Media Container": { "main": [[{ "node": "Wait 45s (IG processing)", "type": "main", "index": 0 }]] },
+    "Wait 45s (IG processing)": { "main": [[{ "node": "IG: Check Container Status", "type": "main", "index": 0 }]] },
+    "IG: Check Container Status": { "main": [[{ "node": "Container Ready?", "type": "main", "index": 0 }]] },
+    "Container Ready?": { "main": [[{ "node": "IG: Publish", "type": "main", "index": 0 }], [{ "node": "Wait 45s (IG processing)", "type": "main", "index": 0 }]] },
+    "IG: Publish": { "main": [[{ "node": "Supabase: Mark Published", "type": "main", "index": 0 }]] },
+    "Supabase: Mark Published": { "main": [[{ "node": "Telegram: Confirm Published", "type": "main", "index": 0 }]] },
+    "Supabase: Mark Rejected + Requeue Topic": { "main": [[{ "node": "Supabase: Requeue Topic", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "pinData": {}
+}
